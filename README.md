@@ -1,12 +1,12 @@
-\# Predictive Maintenance Using Machine Learning: AI4I Dataset Analysis
+# Predictive Maintenance Using Machine Learning: AI4I Dataset Analysis
 
-\*A full end-to-end data science workflow for predicting machine failures.\*
+*A full end-to-end data science workflow for predicting machine failures.*
 
 
 
-\## 📌 Overview
+##  Overview
 
-This project explores the \*\*AI4I 2020 Predictive Maintenance Dataset\*\* to analyse machine operating conditions and build a classification model that predicts machine failures.  
+This project explores the **AI4I 2020 Predictive Maintenance Dataset** to analyse machine operating conditions and build a classification model that predicts machine failures.  
 
 The notebook demonstrates a complete data-science pipeline — from data cleaning and exploratory analysis to model training and evaluation.
 
@@ -22,21 +22,16 @@ This project highlights the potential of machine-learning approaches in supporti
 
 
 
-\## 🧰 Tools \& Technologies
 
-This project uses:
+- **Python**
 
+- **Pandas, NumPy** for data manipulation  
 
+- **Matplotlib, Seaborn** for visualisation  
 
-\- \*\*Python\*\*
+- **Scikit-learn** for machine learning  
 
-\- \*\*Pandas, NumPy\*\* for data manipulation  
-
-\- \*\*Matplotlib, Seaborn\*\* for visualisation  
-
-\- \*\*Scikit-learn\*\* for machine learning  
-
-\- \*\*Jupyter Notebook\*\* for analysis and documentation  
+- **Jupyter Notebook** for analysis and documentation  
 
 
 
@@ -46,19 +41,19 @@ This project uses:
 
 
 
-\## 🎯 Objectives
+##  Objectives
 
 
 
-\- Understand the structure and statistical properties of the AI4I dataset  
+- Understand the structure and statistical properties of the AI4I dataset  
 
-\- Analyse operational conditions related to machine failures  
+- Analyse operational conditions related to machine failures  
 
-\- Create visualisations to identify patterns and correlations  
+- Create visualisations to identify patterns and correlations  
 
-\- Build and evaluate a machine-learning model for failure prediction  
+- Build and evaluate a machine-learning model for failure prediction  
 
-\- Provide insights that support predictive maintenance strategies  
+- Provide insights that support predictive maintenance strategies  
 
 
 
@@ -66,37 +61,37 @@ This project uses:
 
 
 
-\## 📊 Key Steps Performed
+##  Key Steps Performed
 
 
 
-\### 1. \*\*Data Cleaning \& Preprocessing\*\*
+###  **Data Cleaning & Preprocessing**
 
-\- Checked missing values  
+- Checked missing values  
 
-\- Encoded categorical features  
+- Encoded categorical features  
 
-\- Normalised/standardised inputs where needed  
-
-
-
-\### 2. \*\*Exploratory Data Analysis\*\*
-
-\- Distribution plots of operational parameters  
-
-\- Correlation heatmap  
-
-\- Failure type proportions  
+- Normalised/standardised inputs where needed  
 
 
 
-\### 3. \*\*Model Building\*\*
+###  **Exploratory Data Analysis**
 
-\- Train-test split  
+- Distribution plots of operational parameters  
 
-\- Random Forest classifier  
+- Correlation heatmap  
 
-\- Model evaluation using:  
+- Failure type proportions  
+
+
+
+### **Model Building**
+
+- Train-test split  
+
+- Random Forest classifier  
+
+- Model evaluation using:  
 
 &nbsp; - Accuracy  
 
@@ -106,13 +101,13 @@ This project uses:
 
 
 
-\### 4. \*\*Results \& Insights\*\*
+### **Results & Insights**
 
-\- Identification of operational conditions most associated with failure  
+- Identification of operational conditions most associated with failure  
 
-\- Explanation of model performance  
+- Explanation of model performance  
 
-\- Visual summaries saved to the \*Results\* folder  
+- Visual summaries saved to the \*Results\* folder  
 
 
 
@@ -120,7 +115,7 @@ This project uses:
 
 
 
-\## 📈 Results Summary
+## Results Summary
 
 
 
@@ -134,37 +129,28 @@ The analysis also revealed clear patterns in operational features such as \*\*to
 
 
 
-\## 🚀 Future Improvements
+##  Future Improvements
 
 
 
-\- Implement hyperparameter tuning (GridSearch/RandomSearch)  
+- Implement hyperparameter tuning (GridSearch/RandomSearch)  
 
-\- Add interpretability methods (SHAP values, feature importance)  
+- Add interpretability methods (SHAP values, feature importance)  
 
-\- Deploy the model via a Streamlit dashboard or API  
+- Deploy the model via a Streamlit dashboard or API  
 
-\- Test the model using real-world industrial sensor data  
-
-
-
-
-
-\## 📜 License
-
-This project is released under the \*\*MIT License\*\*.
-
+- Test the model using real-world industrial sensor data  
 
 
 ---
 
 
 
-\## ⭐ Acknowledgements
+## Acknowledgements
 
 Dataset Source:  
 
-\*\*UCI Machine Learning Repository — AI4I Predictive Maintenance Dataset\*\*
+**UCI Machine Learning Repository — AI4I Predictive Maintenance Dataset**
 
 
 
