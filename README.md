@@ -22,25 +22,6 @@ This project highlights the potential of machine-learning approaches in supporti
 
 
 
-
-- **Python**
-
-- **Pandas, NumPy** for data manipulation  
-
-- **Matplotlib, Seaborn** for visualisation  
-
-- **Scikit-learn** for machine learning  
-
-- **Jupyter Notebook** for analysis and documentation  
-
-
-
-
-
----
-
-
-
 ##  Objectives
 
 
