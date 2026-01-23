@@ -39,7 +39,7 @@ html, body, [data-testid="stAppViewContainer"] {{
     background: {BG};
 }}
 .block-container {{
-    padding-top: 1.1rem;
+    padding-top: 2.6rem;  /* avoids title clipping + keeps sidebar toggle usable */
     padding-bottom: 1.5rem;
 }}
 #MainMenu {{visibility:hidden;}}
@@ -65,6 +65,7 @@ section[data-testid="stSidebar"] > div {{
     unsafe_allow_html=True,
 )
 
+
 def kpi_card(title, value, subtitle=""):
     st.markdown(
         f"""
@@ -77,11 +78,13 @@ def kpi_card(title, value, subtitle=""):
         unsafe_allow_html=True,
     )
 
+
 # =========================
 # Single-folder project paths
 # =========================
 APP_DIR = Path(__file__).resolve().parent
 DATA_PATH = APP_DIR / "data.csv"
+
 
 @st.cache_data(show_spinner=False)
 def load_csv_with_fallback(path: Path) -> pd.DataFrame:
@@ -94,15 +97,19 @@ def load_csv_with_fallback(path: Path) -> pd.DataFrame:
     # last attempt (raise real error)
     return pd.read_csv(path)
 
+
 @st.cache_data(show_spinner=False)
 def load_uploaded_csv(uploaded_file) -> pd.DataFrame:
     # Same fallback for uploaded files
     for enc in ("utf-8", "cp1252", "latin1"):
         try:
+            uploaded_file.seek(0)
             return pd.read_csv(uploaded_file, encoding=enc)
         except UnicodeDecodeError:
             continue
+    uploaded_file.seek(0)
     return pd.read_csv(uploaded_file)
+
 
 # =========================
 # Model pipeline
@@ -135,13 +142,14 @@ def build_pipeline(n_estimators: int, max_depth: int | None, random_state: int):
     )
 
     clf = RandomForestClassifier(
-        n_estimators=n_estimators,
-        random_state=random_state,
+        n_estimators=int(n_estimators),
+        random_state=int(random_state),
         n_jobs=-1,
         max_depth=max_depth,
     )
 
     return Pipeline(steps=[("prep", pre), ("model", clf)])
+
 
 def detect_target(df: pd.DataFrame) -> str:
     if "Machine failure" in df.columns:
@@ -150,6 +158,7 @@ def detect_target(df: pd.DataFrame) -> str:
         if c.strip().lower() in {"machine failure", "machine_failure", "failure"}:
             return c
     return df.columns[-1]
+
 
 def columns_to_drop_for_model(df: pd.DataFrame, target: str) -> list[str]:
     # Avoid leakage/IDs if present (AI4I commonly includes these)
@@ -163,6 +172,7 @@ def columns_to_drop_for_model(df: pd.DataFrame, target: str) -> list[str]:
     if target in drop:
         drop.remove(target)
     return drop
+
 
 @st.cache_resource(show_spinner=False)
 def train_eval_cached(
@@ -227,7 +237,125 @@ def train_eval_cached(
     except Exception:
         pass
 
-    return pipe, X, X_test, y_test, pred, proba, roc_auc, report, cm, fi, roc, pr, ap
+    # For error diagnostics in Insights
+    abs_err = None
+    if proba is not None:
+        y_arr = y_test.to_numpy()
+        abs_err = np.abs(y_arr - proba)
+
+    return pipe, X, X_test, y_test, pred, proba, roc_auc, report, cm, fi, roc, pr, ap, abs_err
+
+
+# =========================
+# Insight helpers
+# =========================
+def compute_numeric_group_stats(df: pd.DataFrame, target_col: str, feature: str) -> dict:
+    d = df[[feature, target_col]].copy()
+    d[target_col] = pd.to_numeric(d[target_col], errors="coerce").fillna(0).astype(int)
+    d[feature] = pd.to_numeric(d[feature], errors="coerce")
+    d = d.dropna(subset=[feature])
+
+    if d.empty:
+        return {}
+
+    try:
+        d["bin"] = pd.qcut(d[feature], q=8, duplicates="drop")
+    except ValueError:
+        d["bin"] = pd.cut(d[feature], bins=8)
+
+    g = (
+        d.groupby("bin", observed=True)
+        .agg(n=(target_col, "size"), failure_rate=(target_col, "mean"), feat_median=(feature, "median"))
+        .reset_index(drop=True)
+        .sort_values("feat_median")
+    )
+
+    if g.empty:
+        return {}
+
+    first = g.iloc[0]
+    last = g.iloc[-1]
+    delta = (last["failure_rate"] - first["failure_rate"]) * 100
+
+    return {
+        "feature": feature,
+        "first_rate": float(first["failure_rate"] * 100),
+        "last_rate": float(last["failure_rate"] * 100),
+        "delta_pp": float(delta),
+        "table": g,
+    }
+
+
+def data_driven_insights(df: pd.DataFrame, target_col: str, drop_cols: list[str]) -> tuple[list[str], pd.DataFrame]:
+    d = df.copy()
+    y = pd.to_numeric(d[target_col], errors="coerce").fillna(0).astype(int)
+    base_rate = float(y.mean() * 100) if len(y) else np.nan
+    n = len(y)
+
+    insights = []
+    if np.isfinite(base_rate):
+        insights.append(f"Failure rate is {base_rate:.2f}% across {n:,} records. This provides the baseline risk level.")
+    else:
+        insights.append("Failure rate could not be computed for the current target column.")
+
+    num_cols = [c for c in d.columns if pd.api.types.is_numeric_dtype(d[c]) and c not in drop_cols and c != target_col]
+    results = []
+    for f in num_cols[:50]:
+        stats = compute_numeric_group_stats(d, target_col, f)
+        if stats:
+            results.append(
+                {
+                    "feature": stats["feature"],
+                    "low_bin_failure_rate_pct": stats["first_rate"],
+                    "high_bin_failure_rate_pct": stats["last_rate"],
+                    "change_pp": stats["delta_pp"],
+                }
+            )
+
+    res_df = pd.DataFrame(results).sort_values("change_pp", ascending=False).reset_index(drop=True)
+
+    if not res_df.empty:
+        top = res_df.iloc[0]
+        insights.append(
+            f"The strongest failure-rate shift is associated with {top['feature']}: "
+            f"failure rate rises from about {top['low_bin_failure_rate_pct']:.2f}% (low range) "
+            f"to {top['high_bin_failure_rate_pct']:.2f}% (high range), a change of {top['change_pp']:.2f} percentage points."
+        )
+
+        for _, r in res_df.head(3).iterrows():
+            insights.append(
+                f"{r['feature']} shows a {r['change_pp']:.2f} percentage-point increase in failure rate from low to high ranges."
+            )
+
+    return insights, res_df
+
+
+def model_driven_insights(fi: pd.DataFrame, roc_auc: float, ap: float, report: dict) -> list[str]:
+    insights = []
+    acc = float(report.get("accuracy", np.nan))
+
+    if np.isfinite(acc):
+        insights.append(f"Model accuracy is {acc:.3f}.")
+    if np.isfinite(roc_auc):
+        insights.append(f"ROC-AUC is {roc_auc:.3f}, indicating how well the model ranks failures above non-failures.")
+    if np.isfinite(ap):
+        insights.append(f"Average Precision is {ap:.3f}, which summarises the precision-recall trade-off under class imbalance.")
+
+    if fi is not None and not fi.empty:
+        top_feats = fi.head(5)["feature"].tolist()
+        insights.append(f"Top drivers used by the model are: {', '.join(top_feats)}.")
+
+    try:
+        f1_fail = float(report.get("1", {}).get("f1-score", np.nan))
+        rec_fail = float(report.get("1", {}).get("recall", np.nan))
+        prec_fail = float(report.get("1", {}).get("precision", np.nan))
+        if np.isfinite(f1_fail):
+            insights.append(f"Failure-class F1-score is {f1_fail:.3f} (precision {prec_fail:.3f}, recall {rec_fail:.3f}).")
+    except Exception:
+        pass
+
+    return insights
+
 
 # =========================
 # Header
@@ -241,8 +369,11 @@ st.write("")
 # =========================
 # Sidebar
 # =========================
+if "model_trained" not in st.session_state:
+    st.session_state.model_trained = False
+
 st.sidebar.title("Controls")
-page = st.sidebar.radio("Navigate", ["Overview", "EDA", "Model", "Predict"], index=0)
+page = st.sidebar.radio("Navigate", ["Overview", "EDA", "Insights", "Model", "Predict"], index=0)
 
 st.sidebar.divider()
 st.sidebar.subheader("Data")
@@ -284,43 +415,43 @@ max_depth = None if depth_choice == "None" else int(depth_choice)
 
 threshold = st.sidebar.slider("Decision threshold", 0.05, 0.95, 0.50, step=0.05)
 run_train = st.sidebar.button("Train / Refresh", type="primary")
+if run_train:
+    st.session_state.model_trained = True
 
 st.caption(f"Data source: {source_label}")
-
-# =========================
-# KPI row
-# =========================
-n_rows, n_cols = df.shape
-fail_rate = np.nan
-ytemp = pd.to_numeric(df[target_col], errors="coerce")
-if ytemp.notna().any():
-    fail_rate = float((ytemp.fillna(0) > 0).mean() * 100)
-
-k1, k2, k3, k4 = st.columns(4, gap="large")
-with k1:
-    kpi_card("Rows", f"{n_rows:,}", "Records")
-with k2:
-    kpi_card("Columns", f"{n_cols:,}", "Features + target")
-with k3:
-    kpi_card("Failure rate", f"{fail_rate:.2f}%" if np.isfinite(fail_rate) else "—", "Share of failures")
-with k4:
-    kpi_card("Target", target_col, "Prediction target")
-
-st.write("")
 
 # =========================
 # Pages
 # =========================
 if page == "Overview":
+    # KPI row (Overview only)
+    n_rows, n_cols = df.shape
+    fail_rate = np.nan
+    ytemp = pd.to_numeric(df[target_col], errors="coerce")
+    if ytemp.notna().any():
+        fail_rate = float((ytemp.fillna(0) > 0).mean() * 100)
+
+    k1, k2, k3, k4 = st.columns(4, gap="large")
+    with k1:
+        kpi_card("Rows", f"{n_rows:,}", "Records")
+    with k2:
+        kpi_card("Columns", f"{n_cols:,}", "Features + target")
+    with k3:
+        kpi_card("Failure rate", f"{fail_rate:.2f}%" if np.isfinite(fail_rate) else "—", "Share of failures")
+    with k4:
+        kpi_card("Target", target_col, "Prediction target")
+
+    st.write("")
+
     left, right = st.columns([1.2, 1.0], gap="large")
     with left:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Project Summary")
         st.write(
             """
-- Failure frequency and basic dataset profile  
-- Feature patterns linked to failure risk  
-- Model evaluation metrics and error analysis  
+- Failure frequency and basic dataset profile
+- Feature patterns linked to failure risk
+- Model evaluation metrics and error analysis
 - Interactive prediction tool for scenario testing
             """.strip()
         )
@@ -389,6 +520,160 @@ elif page == "EDA":
         st.plotly_chart(figd, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
+elif page == "Insights":
+    st.markdown("### Insights")
+    st.caption(
+        "This section converts charts into plain-language takeaways. "
+        "It starts with data-driven insights, then adds model-driven insights after training."
+    )
+
+    drop_cols = columns_to_drop_for_model(df, target_col)
+
+    # -------------------------
+    # Data-driven insights
+    # -------------------------
+    data_ins, shift_table = data_driven_insights(df, target_col, drop_cols)
+
+    yv = pd.to_numeric(df[target_col], errors="coerce").fillna(0).astype(int)
+    base_rate = float(yv.mean() * 100) if len(yv) else np.nan
+    failures = int(yv.sum()) if len(yv) else 0
+    non_fail = int((yv == 0).sum()) if len(yv) else 0
+
+    c1, c2, c3, c4 = st.columns(4, gap="large")
+    with c1:
+        kpi_card("Baseline failure rate", f"{base_rate:.2f}%" if np.isfinite(base_rate) else "—", "Across all records")
+    with c2:
+        kpi_card("Failures", f"{failures:,}", "Count of failures")
+    with c3:
+        kpi_card("Non-failures", f"{non_fail:,}", "Count of normal cases")
+    with c4:
+        kpi_card("Records", f"{len(yv):,}", "Used for insights")
+
+    st.write("")
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Insights (data-driven)")
+    for item in data_ins[:10]:
+        st.write(f"- {item}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.write("")
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Failure-rate shift by feature range")
+    st.caption(
+        "Features below are ranked by how much failure rate increases from low to high value ranges (binned)."
+    )
+    if shift_table.empty:
+        st.write("Not enough numeric feature data to compute failure-rate shifts.")
+    else:
+        topn = st.slider("Show top N features", 5, min(25, len(shift_table)), 12)
+        show = shift_table.head(topn).copy()
+        fig_shift = px.bar(
+            show.iloc[::-1],
+            x="change_pp",
+            y="feature",
+            orientation="h",
+            labels={"change_pp": "Change in failure rate (percentage points)"},
+        )
+        fig_shift.update_layout(height=420, margin=dict(l=0, r=0, t=10, b=0))
+        st.plotly_chart(fig_shift, use_container_width=True)
+        st.dataframe(show, use_container_width=True, hide_index=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.write("")
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Feature impact explorer")
+    st.caption("Select one numeric feature to see how failure rate changes across its range.")
+    num_cols = [
+        c
+        for c in df.columns
+        if pd.api.types.is_numeric_dtype(df[c]) and c not in drop_cols and c != target_col
+    ]
+    if not num_cols:
+        st.write("No numeric feature columns available for this view.")
+    else:
+        feat_sel = st.selectbox("Numeric feature", num_cols, index=0)
+        stats = compute_numeric_group_stats(df, target_col, feat_sel)
+        if not stats:
+            st.write("Not enough valid values to compute bins for this feature.")
+        else:
+            g = stats["table"].copy()
+            fig_bins = px.line(
+                g,
+                x="feat_median",
+                y="failure_rate",
+                markers=True,
+                labels={"feat_median": "Feature bin median", "failure_rate": "Failure rate"},
+            )
+            fig_bins.update_layout(height=360, margin=dict(l=0, r=0, t=10, b=0))
+            st.plotly_chart(fig_bins, use_container_width=True)
+
+            g2 = g.copy()
+            g2["failure_rate_pct"] = (g2["failure_rate"] * 100).round(2)
+            g2 = g2[["n", "failure_rate_pct", "feat_median"]].rename(columns={"feat_median": "bin_median"})
+            st.dataframe(g2, use_container_width=True, hide_index=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # -------------------------
+    # Model-driven insights (requires training)
+    # -------------------------
+    st.write("")
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Insights (model-driven)")
+    st.caption("Train the model to unlock feature importance and performance diagnostics.")
+
+    if not st.session_state.model_trained:
+        st.info("Click Train / Refresh in the sidebar to generate model-driven insights.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.stop()
+
+    with st.spinner("Training model for insights (cached)..."):
+        pipe, X_all, X_test, y_test, pred, proba, roc_auc, report, cm, fi, roc, pr, ap, abs_err = train_eval_cached(
+            df=df,
+            target_col=target_col,
+            test_size=float(test_size),
+            random_state=int(random_state),
+            n_estimators=int(n_estimators),
+            max_depth=max_depth,
+        )
+
+    insights_m = model_driven_insights(fi, roc_auc, ap, report)
+
+    accuracy = float(report.get("accuracy", np.nan))
+    f1_fail = float(report.get("1", {}).get("f1-score", np.nan)) if isinstance(report, dict) else np.nan
+
+    m1, m2, m3, m4 = st.columns(4, gap="large")
+    with m1:
+        kpi_card("Accuracy", f"{accuracy:.3f}" if np.isfinite(accuracy) else "—", "Overall correctness")
+    with m2:
+        kpi_card("ROC-AUC", f"{roc_auc:.3f}" if np.isfinite(roc_auc) else "—", "Ranking quality")
+    with m3:
+        kpi_card("Average Precision", f"{ap:.3f}" if np.isfinite(ap) else "—", "Precision-Recall summary")
+    with m4:
+        kpi_card("Failure-class F1", f"{f1_fail:.3f}" if np.isfinite(f1_fail) else "—", "Class 1 performance")
+
+    st.write("")
+    for item in insights_m[:10]:
+        st.write(f"- {item}")
+
+    st.write("")
+    if fi is not None and not fi.empty:
+        topn = st.slider("Show top N model drivers", 5, 25, 12)
+        fi_top = fi.head(topn).iloc[::-1]
+        fig_fi = px.bar(fi_top, x="importance", y="feature", orientation="h")
+        fig_fi.update_layout(height=360, margin=dict(l=0, r=0, t=10, b=0))
+        st.plotly_chart(fig_fi, use_container_width=True)
+
+    if abs_err is not None:
+        st.write("")
+        st.subheader("Where the model is less reliable")
+        st.caption("Higher probability error indicates cases where predicted probability is far from the true label.")
+        ae = pd.Series(abs_err, name="probability_error")
+        fig_err = px.histogram(ae, nbins=60, labels={"value": "Probability error"})
+        fig_err.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0))
+        st.plotly_chart(fig_err, use_container_width=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
 elif page == "Model":
     st.markdown("### Model Performance")
 
@@ -397,7 +682,7 @@ elif page == "Model":
         st.stop()
 
     with st.spinner("Training model..."):
-        pipe, X_all, X_test, y_test, pred, proba, roc_auc, report, cm, fi, roc, pr, ap = train_eval_cached(
+        pipe, X_all, X_test, y_test, pred, proba, roc_auc, report, cm, fi, roc, pr, ap, abs_err = train_eval_cached(
             df=df,
             target_col=target_col,
             test_size=float(test_size),
@@ -484,7 +769,7 @@ elif page == "Predict":
         st.stop()
 
     with st.spinner("Training model..."):
-        pipe, X_all, X_test, y_test, pred, proba, roc_auc, report, cm, fi, roc, pr, ap = train_eval_cached(
+        pipe, X_all, X_test, y_test, pred, proba, roc_auc, report, cm, fi, roc, pr, ap, abs_err = train_eval_cached(
             df=df,
             target_col=target_col,
             test_size=float(test_size),
@@ -513,7 +798,10 @@ elif page == "Predict":
             vmin = float(v.quantile(0.01))
             vmax = float(v.quantile(0.99))
             vmed = float(v.median())
-            input_row[col] = box.slider(col, min_value=vmin, max_value=vmax, value=vmed)
+            if np.isclose(vmin, vmax):
+                input_row[col] = box.number_input(col, value=float(vmed))
+            else:
+                input_row[col] = box.slider(col, min_value=vmin, max_value=vmax, value=vmed)
         else:
             vals = s.dropna().astype(str).unique().tolist()
             vals = sorted(vals)[:200] if len(vals) > 200 else sorted(vals)
@@ -532,7 +820,10 @@ elif page == "Predict":
         st.success(f"Predicted failure probability: {p:.2%}")
         st.write(f"Decision threshold: {threshold:.2f}")
         st.write(f"Predicted class: {'Failure' if decision==1 else 'No failure'}")
-        st.markdown("<div class='small'>Use this to test scenarios and see how risk changes.</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='small'>Use this tool to test scenarios and observe how risk changes.</div>",
+            unsafe_allow_html=True,
+        )
     else:
         pred_cls = int(pipe.predict(X_new)[0])
         st.success(f"Predicted class: {pred_cls}")
